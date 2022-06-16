@@ -162,6 +162,7 @@ import {
   readAndInjectDependencies,
   writeDependencies,
 } from "./pandoc-html-dependencies.ts";
+import { withTiming } from "../../core/timing.ts";
 
 export async function runPandoc(
   options: PandocOptions,
@@ -1013,12 +1014,12 @@ async function resolveExtras(
       doc: Document,
       _inputMedata: Metadata,
     ): Promise<HtmlPostProcessResult> => {
-      return readAndInjectDependencies(
+      return withTiming("pandocDependenciesPostProcessor", () => readAndInjectDependencies(
         htmlDependenciesFile,
         inputDir,
         libDir,
         doc,
-      );
+      ));
     };
 
     // Add a post processor to resolve dependencies
