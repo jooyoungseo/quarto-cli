@@ -4,13 +4,14 @@
  * Copyright (C) 2021 by RStudio, PBC
  */
 
-import { diffLines } from "diff";
+import { diffLines } from "./lib/external/diff.js";
 import { rangedLines } from "./lib/ranged-text.ts";
 
 import { asMappedString, mappedString } from "./lib/mapped-text.ts";
 
 import { Range } from "./lib/text-types.ts";
 import { relative } from "path/mod.ts";
+import { warning } from "log/mod.ts";
 
 import * as mt from "./lib/mapped-text.ts";
 import { withTiming } from "./timing.ts";
@@ -38,15 +39,30 @@ export function mappedDiff(
 ) {
   return withTiming("mapped-diff", () => {
     const sourceLineRanges = rangedLines(source.value).map((x) => x.range);
-    console.log(sourceLineRanges.length, rangedLines(target).length);
 
     Deno.writeTextFileSync("/tmp/file1", source.value);
     Deno.writeTextFileSync("/tmp/file2", target);
     let sourceCursor = 0;
 
     const resultChunks: (string | Range)[] = [];
-    const diffResult = diffLines(source.value, target);
-    console.log(`${diffResult.length} actions.`);
+    const started = performance.now();
+    const maxTime = 2000; // don't let computation go for more than 2s.
+    const diffResult = diffLines(
+      source.value,
+      target,
+      () => {
+        const now = performance.now();
+        if (now - started > maxTime) {
+          return true;
+        }
+      },
+    );
+    if (diffResult === undefined) {
+      warning(
+        "Warning: diff of engine output timed out. No source lines will be available.",
+      );
+      return asMappedString(target);
+    }
     for (const action of diffResult) {
       if (action.removed) {
         // skip this many lines from the source
