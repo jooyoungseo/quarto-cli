@@ -7,11 +7,12 @@
 
 import { info } from "log/mod.ts";
 import * as colors from "fmt/colors.ts";
+import { ensureDirSync, walkSync } from "fs/mod.ts";
 
 import { Input } from "cliffy/prompt/input.ts";
 import { Select } from "cliffy/prompt/select.ts";
 
-import { join } from "path/mod.ts";
+import { dirname, join, relative } from "path/mod.ts";
 import { crypto } from "crypto/mod.ts";
 import { encode as hexEncode } from "encoding/hex.ts";
 
@@ -24,6 +25,11 @@ import { PublishFiles } from "../provider.ts";
 import { capitalize } from "../../core/text.ts";
 import { gfmAutoIdentifier } from "../../core/pandoc/pandoc-id.ts";
 import { randomHex } from "../../core/random.ts";
+import { copyTo } from "../../core/copy.ts";
+import { isHtmlContent, isPdfContent } from "../../core/mime.ts";
+import { globalTempContext } from "../../core/temp.ts";
+import { formatResourcePath } from "../../core/resources.ts";
+import { encodeAttributeValue } from "../../core/html.ts";
 
 export interface PublishSite {
   id?: string;
@@ -38,6 +44,10 @@ export interface PublishDeploy {
   url?: string;
   admin_url?: string;
   launch_url?: string;
+}
+
+export interface UserSite {
+  url: string;
 }
 
 export interface PublishHandler<
@@ -61,6 +71,7 @@ export interface PublishHandler<
     path: string,
     fileBody: Blob,
   ) => Promise<void>;
+  updateUserSite?: () => Promise<UserSite>;
 }
 
 export async function handlePublish<
@@ -98,29 +109,28 @@ export async function handlePublish<
   target = target!;
 
   // render
-  const publishFiles = await render(target.url);
+  let publishFiles = await render(target.url);
 
-  // add a _redirects file if necessary
-  const kRedirects = "_redirects";
-  let redirectsFile: string | undefined;
+  // validate that the main document is html
   if (
-    publishFiles.rootFile !== "index.html" &&
-    !publishFiles.files.includes(kRedirects)
+    type === "document" &&
+    !isHtmlContent(publishFiles.rootFile) &&
+    !isPdfContent(publishFiles.rootFile)
   ) {
-    redirectsFile = Deno.makeTempFileSync();
-    Deno.writeTextFileSync(
-      redirectsFile,
-      `/          /${publishFiles.rootFile}\n`,
+    throw new Error(
+      `Documents published to ${handler.name} must be either HTML or PDF.`,
     );
-    publishFiles.files.push(kRedirects);
+  }
+
+  // if this is a document then stage the files
+  if (type === "document") {
+    publishFiles = stageDocumentPublish(title, publishFiles);
   }
 
   // function to resolve the full path of a file
   // (given that redirects could be in play)
   const publishFilePath = (file: string) => {
-    return ((file === kRedirects) && redirectsFile)
-      ? redirectsFile
-      : join(publishFiles.baseDir, file);
+    return join(publishFiles.baseDir, file);
   };
 
   // build file list
@@ -203,12 +213,98 @@ export async function handlePublish<
     }
   });
 
-  completeMessage(`Published: ${targetUrl}\n`);
+  // Complete message.
+  completeMessage(`Published ${type}: ${targetUrl}`);
+
+  // If the handler provides an update user site function, call it.
+  if (handler.updateUserSite) {
+    let userSite: UserSite;
+    await withSpinner({
+      message: `Updating user site`,
+      doneMessage: false,
+    }, async () => {
+      userSite = await handler.updateUserSite!();
+    });
+    completeMessage(`User site updated: ${userSite!.url}`);
+  }
+
+  // Spacer.
+  info("");
 
   return [
     { ...target, url: targetUrl },
     launchUrl ? new URL(launchUrl) : undefined,
   ];
+}
+
+function stageDocumentPublish(title: string, publishFiles: PublishFiles) {
+  // create temp dir
+  const publishDir = globalTempContext().createDir();
+
+  // copy all files to it
+  const stagedFiles = window.structuredClone(publishFiles) as PublishFiles;
+  stagedFiles.baseDir = publishDir;
+  for (const file of publishFiles.files) {
+    const src = join(publishFiles.baseDir, file);
+    const target = join(stagedFiles.baseDir, file);
+    ensureDirSync(dirname(target));
+    copyTo(src, target);
+  }
+
+  // if this is an html document that isn't index.html then
+  // create an index.html and add it to the staged dir
+  const kIndex = "index.html";
+  if (isHtmlContent(publishFiles.rootFile)) {
+    if (stagedFiles.rootFile !== "index.html") {
+      copyTo(
+        join(stagedFiles.baseDir, stagedFiles.rootFile),
+        join(stagedFiles.baseDir, kIndex),
+      );
+    }
+  } else if (isPdfContent(publishFiles.rootFile)) {
+    // copy pdf.js into the publish dir and add to staged files
+    const src = formatResourcePath("pdf", "pdfjs");
+    const dest = join(stagedFiles.baseDir, "pdfjs");
+    for (const walk of walkSync(src)) {
+      if (walk.isFile) {
+        const destFile = join(dest, relative(src, walk.path));
+        ensureDirSync(dirname(destFile));
+        copyTo(walk.path, destFile);
+        stagedFiles.files.push(relative(stagedFiles.baseDir, destFile));
+      }
+    }
+    // write an index file that serves the pdf
+    const indexHtml = `<!DOCTYPE html>
+<html>
+<head>
+<title>${encodeAttributeValue(title)}</title>
+<style type="text/css">
+  body, html {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+  }
+</style>
+</head>
+<body>
+<iframe id="pdf-js-viewer" src="pdfjs/web/viewer.html?file=../../${
+      encodeAttributeValue(stagedFiles.rootFile)
+    }" title="${
+      encodeAttributeValue(title)
+    }" frameborder="0" width="100%" height="100%"></iframe>
+
+</body>
+</html>
+`;
+    Deno.writeTextFileSync(join(stagedFiles.baseDir, kIndex), indexHtml);
+  }
+
+  // make sure the root file is index.html
+  if (!stagedFiles.files.includes(kIndex)) {
+    stagedFiles.files.push(kIndex);
+  }
+  stagedFiles.rootFile = kIndex;
+
+  // return staged directory
+  return stagedFiles;
 }
 
 async function promptForSlug(

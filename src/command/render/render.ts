@@ -5,7 +5,7 @@
 *
 */
 
-import { existsSync } from "fs/mod.ts";
+import { ensureDirSync, existsSync } from "fs/mod.ts";
 
 import { basename, dirname, isAbsolute, join, relative } from "path/mod.ts";
 
@@ -49,6 +49,7 @@ import {
   withTiming,
   withTimingAsync,
 } from "../../core/timing.ts";
+import { filesDirMediabagDir } from "./render-paths.ts";
 
 export async function renderPandoc(
   file: ExecutedFile,
@@ -96,11 +97,18 @@ export async function renderPandoc(
     }
   }
 
+  // the mediabag dir should be created here based on the context
+  // (it could be in the _files dir). if its a single file book
+  // though it can even be in a temp dir
+  const mediabagDir = filesDirMediabagDir(context.target.source);
+  ensureDirSync(join(dirname(context.target.source), mediabagDir));
+
   // pandoc options
   const pandocOptions: PandocOptions = {
     markdown: executeResult.markdown,
     source: context.target.source,
     output: recipe.output,
+    mediabagDir,
     libDir: context.libDir,
     format,
     project: context.project,

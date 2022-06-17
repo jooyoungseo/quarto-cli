@@ -19,13 +19,8 @@ import { withSpinner } from "../core/console.ts";
 import { downloadWithProgress } from "../core/download.ts";
 import { readExtensions } from "./extension.ts";
 import { info } from "log/mod.ts";
+import { ExtensionSource, extensionSource } from "./extension-host.ts";
 
-export interface ExtensionSource {
-  type: "remote" | "local";
-  owner?: string;
-  resolvedTarget: string;
-  targetSubdir?: string;
-}
 const kUnversionedFrom = "  (?)";
 const kUnversionedTo = "(?)  ";
 
@@ -63,7 +58,7 @@ export async function installExtension(
 
     if (confirmed) {
       // Complete the installation
-      await completeInstallation(extensionDir, installDir);
+      await completeInstallation(extensionDir, installDir, source);
     } else {
       // Not confirmed, cancel the installation
       cancelInstallation();
@@ -134,7 +129,7 @@ async function stageExtension(
 ) {
   if (source.type === "remote") {
     // Stages a remote file by downloading and unzipping it
-    const archiveDir = join(workingDir, "achive");
+    const archiveDir = join(workingDir, "archive");
     ensureDirSync(archiveDir);
 
     // The filename
@@ -195,9 +190,9 @@ async function unzipAndStage(
   const archiveDir = dirname(zipFile);
 
   // Use a subdirectory if the source provides one
-  const extensionsDir = source.targetSubdir
-    ? join(archiveDir, source.targetSubdir)
-    : extensionDir(archiveDir) || archiveDir;
+  const extensionsDir = extensionDir(
+    source.targetSubdir ? join(archiveDir, source.targetSubdir) : archiveDir,
+  );
 
   // Make the final directory we're staging into
   const finalDir = join(archiveDir, "staged");
@@ -215,9 +210,16 @@ async function unzipAndStage(
 
 // Reads the extensions from an extensions directory and copies
 // them to a destination directory
-function readAndCopyExtensions(extensionsDir: string, targetDir: string) {
+function readAndCopyExtensions(
+  extensionsDir: string,
+  targetDir: string,
+) {
   const extensions = readExtensions(extensionsDir);
-  info(`    Found ${extensions.length} extensions.`);
+  info(
+    `    Found ${extensions.length} ${
+      extensions.length === 1 ? "extension" : "extensions"
+    }.`,
+  );
 
   for (const extension of extensions) {
     copyTo(
@@ -411,11 +413,25 @@ async function confirmInstallation(
 }
 
 // Copy the extension files into place
-async function completeInstallation(downloadDir: string, installDir: string) {
+async function completeInstallation(
+  downloadDir: string,
+  installDir: string,
+  source: ExtensionSource,
+) {
   info("");
+
+  const message = () => {
+    const baseMessage = `Extension installation complete.`;
+    if (source.learnMoreUrl) {
+      return `${baseMessage}\nLearn more about this extension at ${source.learnMoreUrl}`;
+    } else {
+      return baseMessage;
+    }
+  };
+
   await withSpinner({
     message: `Copying`,
-    doneMessage: `Extension installation complete`,
+    doneMessage: message(),
   }, () => {
     copyTo(downloadDir, installDir, { overwrite: true });
     return Promise.resolve();
@@ -433,89 +449,7 @@ const extensionDir = (path: string) => {
     if (existsSync(extDir) && Deno.statSync(extDir).isDirectory) {
       return extDir;
     } else {
-      return undefined;
+      return path;
     }
   }
 };
-
-const githubTagRegexp =
-  /^http(?:s?):\/\/(?:www\.)?github.com\/(.*?)\/(.*?)\/archive\/refs\/tags\/(?:v?)(.*)(\.tar\.gz|\.zip)$/;
-const githubLatestRegexp =
-  /^http(?:s?):\/\/(?:www\.)?github.com\/(.*?)\/(.*?)\/archive\/refs\/heads\/(?:v?)(.*)(\.tar\.gz|\.zip)$/;
-
-function extensionSource(target: string): ExtensionSource {
-  if (existsSync(target)) {
-    return { type: "local", resolvedTarget: target };
-  } else {
-    let resolved;
-    for (const resolver of resolvers) {
-      resolved = resolver(target);
-      if (resolved) {
-        break;
-      }
-    }
-
-    return {
-      type: "remote",
-      resolvedTarget: resolved?.url || target,
-      owner: resolved?.owner,
-      targetSubdir: resolved ? repoSubdirectory(resolved.url) : undefined,
-    };
-  }
-}
-
-function repoSubdirectory(url: string) {
-  const tagMatch = url.match(githubTagRegexp);
-  if (tagMatch) {
-    return tagMatch[2] + "-" + tagMatch[3];
-  } else {
-    const latestMatch = url.match(githubLatestRegexp);
-    if (latestMatch) {
-      return latestMatch[2] + "-" + latestMatch[3];
-    } else {
-      return undefined;
-    }
-  }
-}
-
-const githubNameRegex =
-  /^([a-zA-Z0-9-_\.]*?)\/([a-zA-Z0-9-_\.]*?)(?:@latest)?$/;
-const githubLatest = (name: string) => {
-  const match = name.match(githubNameRegex);
-  if (match) {
-    return {
-      url: `https://github.com/${match[1]}/${
-        match[2]
-      }/archive/refs/heads/main.tar.gz`,
-      owner: match[1],
-    };
-  } else {
-    return undefined;
-  }
-};
-
-const githubVersionRegex =
-  /^([a-zA-Z0-9-_\.]*?)\/([a-zA-Z0-9-_\.]*?)@v([a-zA-Z0-9-_\.]*)$/;
-const githubVersion = (name: string) => {
-  const match = name.match(githubVersionRegex);
-  if (match) {
-    return {
-      url: `https://github.com/${match[1]}/${match[2]}/archive/refs/tags/v${
-        match[3]
-      }.tar.gz`,
-      owner: match[1],
-    };
-  } else {
-    return undefined;
-  }
-};
-
-interface ResolvedExtensionInfo {
-  url: string;
-  owner?: string;
-}
-const resolvers: ExtensionNameResolver[] = [githubLatest, githubVersion];
-
-type ExtensionNameResolver = (
-  name: string,
-) => ResolvedExtensionInfo | undefined;
