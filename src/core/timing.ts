@@ -102,6 +102,14 @@ export function insertExplicitTimingEntries(
   });
 
   let prevTime = ourStart;
+
+  // "_start" is a special case that indicates
+  // an untracked chunk of time that exists only for alignment purposes.
+  if (entries.length && entries[0].name === "_start") {
+    prevTime = entries[0].time - theirStart + ourStart;
+    entries = entries.slice(1);
+  }
+
   for (const entry of entries) {
     nodeStack.push({
       name: entry.name,
