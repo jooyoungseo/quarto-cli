@@ -68,6 +68,8 @@ const kMediabagDir = "mediabag-dir";
 
 const kResultsFile = "results-file";
 
+const kTimingFile = "timings-file";
+
 export function filterParamsJson(
   args: string[],
   options: PandocOptions,
@@ -75,6 +77,7 @@ export function filterParamsJson(
   filterParams: Record<string, unknown>,
   resultsFile: string,
   dependenciesFile: string,
+  timingFile: string,
 ) {
   // extract include params (possibly mutating it's arguments)
   const includes = options.format.render[kMergeIncludes] !== false
@@ -104,6 +107,7 @@ export function filterParamsJson(
     ...languageFilterParams(options.format.language),
     ...filterParams,
     [kResultsFile]: pandocMetadataPath(resultsFile),
+    [kTimingFile]: pandocMetadataPath(timingFile),
   };
   return JSON.stringify(params);
 }

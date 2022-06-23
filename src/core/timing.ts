@@ -5,6 +5,8 @@
 *
 */
 
+import { execProcess } from "./process.ts";
+
 interface TimingNode {
   name: string;
   start: number;
@@ -65,16 +67,68 @@ export function push(name: string) {
   });
 }
 
-export function pop() {
+export function pop(at?: number) {
   if (nodeStack.length <= 1) {
     throw new Error("Can't pop top node");
   }
   const node = nodeStack.pop()!;
-  node.end = performance.now();
+  node.end = at ?? performance.now();
   nodeStack[nodeStack.length - 1].children.push(node);
 }
 
 export function getData() {
   nodeStack[0].end = performance.now();
   return nodeStack[0];
+}
+
+export interface ExplicitTimingEntry {
+  time: number;
+  name: string;
+}
+
+export function insertExplicitTimingEntries(
+  start: [number, number],
+  end: [number, number],
+  entries: ExplicitTimingEntry[],
+  groupName: string,
+) {
+  const [theirStart, ourStart] = start;
+  const [theirEnd, _] = end;
+  nodeStack.push({
+    name: groupName,
+    start: ourStart,
+    end: 0,
+    children: [],
+  });
+
+  let prevTime = ourStart;
+  for (const entry of entries) {
+    nodeStack.push({
+      name: entry.name,
+      start: prevTime,
+      end: 0,
+      children: [],
+    });
+    prevTime = entry.time - theirStart + ourStart;
+    pop(prevTime);
+  }
+
+  prevTime = theirEnd - theirStart + ourStart;
+  pop(prevTime);
+}
+
+export async function getLuaTiming(): Promise<[number, number]> {
+  if (Deno.env.get("QUARTO_PROFILE")) {
+    return [
+      Number(
+        (await execProcess({
+          cmd: ["python", "-c", "import time; print(time.time() * 1000)"],
+          stdout: "piped",
+        })).stdout!,
+      ),
+      performance.now(),
+    ];
+  } else {
+    return [0, 0];
+  }
 }
