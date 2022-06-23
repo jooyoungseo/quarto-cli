@@ -98,7 +98,6 @@ export function codeToolsPostprocessor(format: Format) {
         const lines = doc.querySelectorAll(
           `.${kEmbeddedSourceClass} > div.sourceCode > pre > code > span`,
         );
-
         if (lines.length > 0) {
           const newLines: Element[] = [];
           for (let i = 0; i < lines.length; i++) {
@@ -106,13 +105,19 @@ export function codeToolsPostprocessor(format: Format) {
             if (line.innerText === kKeepSourceSentinel) {
               i += 2;
               const codeBlockLine = lines[i] as Element;
-              const codeSpan = codeBlockLine.lastChild as Element;
-              if (codeSpan.innerHTML) {
-                codeSpan.innerHTML = codeSpan.innerHTML.replace(
-                  /```(\w+)/,
-                  "```{$1}",
-                );
-              }
+              const anchor = codeBlockLine.querySelector("a");
+              const text = codeBlockLine.innerText;
+
+              codeBlockLine.textContent = "";
+              codeBlockLine.appendChild(anchor!);
+              const newSpan = doc.createElement("span");
+              newSpan.classList.add("in");
+              newSpan.innerText = text.replace(
+                /```(\w+)/,
+                "```{$1}",
+              );
+              codeBlockLine.appendChild(newSpan);
+
               newLines.push(codeBlockLine);
             } else {
               newLines.push(line);

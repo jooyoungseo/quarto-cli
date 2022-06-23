@@ -58,10 +58,14 @@ export function findProvider(name?: string) {
   return kPublishProviders.find((provider) => provider.name === name);
 }
 
-export type PublishDeployment = {
+export interface PublishDeployment {
   provider: PublishProvider;
   target: PublishRecord;
-};
+}
+
+export interface PublishDeploymentWithAccount extends PublishDeployment {
+  account?: AccountToken;
+}
 
 export type PublishFiles = {
   baseDir: string;
@@ -73,7 +77,6 @@ export interface PublishProvider {
   name: string;
   description: string;
   requiresServer: boolean;
-  canPublishDocuments: boolean;
   listOriginOnly: boolean;
   publishRecord?: (dir: string) => Promise<PublishRecord | undefined>;
   accountTokens: () => Promise<AccountToken[]>;
@@ -97,4 +100,5 @@ export interface PublishProvider {
     target?: PublishRecord,
   ) => Promise<[PublishRecord | undefined, URL | undefined]>;
   isUnauthorized: (error: Error) => boolean;
+  isNotFound: (error: Error) => boolean;
 }

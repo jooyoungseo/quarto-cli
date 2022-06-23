@@ -46,7 +46,7 @@ export interface PublishDeploy {
   launch_url?: string;
 }
 
-export interface UserSite {
+export interface AccountSite {
   url: string;
 }
 
@@ -71,7 +71,7 @@ export interface PublishHandler<
     path: string,
     fileBody: Blob,
   ) => Promise<void>;
-  updateUserSite?: () => Promise<UserSite>;
+  updateAccountSite?: () => Promise<AccountSite>;
 }
 
 export async function handlePublish<
@@ -109,23 +109,13 @@ export async function handlePublish<
   target = target!;
 
   // render
-  let publishFiles = await render(target.url);
-
-  // validate that the main document is html
-  if (
-    type === "document" &&
-    !isHtmlContent(publishFiles.rootFile) &&
-    !isPdfContent(publishFiles.rootFile)
-  ) {
-    throw new Error(
-      `Documents published to ${handler.name} must be either HTML or PDF.`,
-    );
-  }
-
-  // if this is a document then stage the files
-  if (type === "document") {
-    publishFiles = stageDocumentPublish(title, publishFiles);
-  }
+  const publishFiles = await renderForPublish(
+    render,
+    handler.name,
+    type,
+    title,
+    target.url,
+  );
 
   // function to resolve the full path of a file
   // (given that redirects could be in play)
@@ -216,16 +206,16 @@ export async function handlePublish<
   // Complete message.
   completeMessage(`Published ${type}: ${targetUrl}`);
 
-  // If the handler provides an update user site function, call it.
-  if (handler.updateUserSite) {
-    let userSite: UserSite;
+  // If the handler provides an update account site function, call it.
+  if (handler.updateAccountSite) {
+    let accountSite: AccountSite;
     await withSpinner({
-      message: `Updating user site`,
+      message: `Updating account site`,
       doneMessage: false,
     }, async () => {
-      userSite = await handler.updateUserSite!();
+      accountSite = await handler.updateAccountSite!();
     });
-    completeMessage(`User site updated: ${userSite!.url}`);
+    completeMessage(`Account site updated: ${accountSite!.url}`);
   }
 
   // Spacer.
@@ -235,6 +225,35 @@ export async function handlePublish<
     { ...target, url: targetUrl },
     launchUrl ? new URL(launchUrl) : undefined,
   ];
+}
+
+export async function renderForPublish(
+  render: (siteUrl?: string) => Promise<PublishFiles>,
+  providerName: string,
+  type: "document" | "site",
+  title: string,
+  siteUrl?: string,
+) {
+  // render
+  let publishFiles = await render(siteUrl);
+
+  // validate that the main document is html or pdf
+  if (
+    type === "document" &&
+    !isHtmlContent(publishFiles.rootFile) &&
+    !isPdfContent(publishFiles.rootFile)
+  ) {
+    throw new Error(
+      `Documents published to ${providerName} must be either HTML or PDF.`,
+    );
+  }
+
+  // if this is a document then stage the files
+  if (type === "document") {
+    publishFiles = stageDocumentPublish(title, publishFiles);
+  }
+
+  return publishFiles;
 }
 
 function stageDocumentPublish(title: string, publishFiles: PublishFiles) {

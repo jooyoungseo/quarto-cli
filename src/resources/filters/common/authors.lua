@@ -119,7 +119,7 @@ local kDoiTitle = 'doi-title'
 -- The field types for an author (maps the field in an author table)
 -- to the way the field should be processed
 local kAuthorNameFields = { kName }
-local kSuthorSimpleFields = { kId, kUrl, kEmail, kFax, kPhone, kOrcid, kAcknowledgements }
+local kAuthorSimpleFields = { kId, kUrl, kEmail, kFax, kPhone, kOrcid, kAcknowledgements }
 local kAuthorAttributeFields = { kCorresponding, kEqualContributor }
 local kAuthorAffiliationFields = { kAffiliation, kAffiliations }
 
@@ -238,7 +238,6 @@ function processAuthorMeta(meta)
 
   -- Provide localized or user specified strings for title block elements
   meta = computeLabels(authors, affiliations, meta)
-
   return meta
 end
 
@@ -290,7 +289,8 @@ end
 -- and normalized set of affilations
 function processAuthor(value) 
   -- initialize the author
-  local author = pandoc.List({})
+  local author = pandoc.MetaMap({})
+  author[kMetadata] = pandoc.MetaMap({})
 
   -- initialize their affilations
   local authorAffiliations = {}
@@ -306,7 +306,7 @@ function processAuthor(value)
       if tcontains(kAuthorNameFields, authorKey) then
         -- process any names
         author[authorKey] = toName(authorValue)
-      elseif tcontains(kSuthorSimpleFields, authorKey) then
+      elseif tcontains(kAuthorSimpleFields, authorKey) then
         -- process simple fields
         author[authorKey] = authorValue
       elseif tcontains(kAuthorAttributeFields, authorKey) then
@@ -465,9 +465,6 @@ end
 -- Sets a metadata value, initializing the table if
 -- it not yet defined
 function setMetadata(author, key, value) 
-  if not author[kMetadata] then
-    author[kMetadata] = {}
-  end
   author[kMetadata][key] = value
 end
 
@@ -475,7 +472,7 @@ end
 -- is not yet defined
 function setAttribute(author, attribute) 
   if not author[kAttributes] then
-    author[kAttributes] = {}
+    author[kAttributes] = pandoc.MetaMap({})
   end
   
   local attrStr = pandoc.utils.stringify(attribute)
@@ -529,10 +526,18 @@ function normalizeName(name)
     if name[kLiteralName] then 
       local parsedName = bibtexParseName(name)
       if type(parsedName) == 'table' then
-        name[kGivenName] = parsedName.given
-        name[kFamilyName] = parsedName.family
-        name[kDroppingParticle] = parsedName[kDroppingParticle]
-        name[kNonDroppingParticle] = parsedName[kNonDroppingParticle]
+        if parsedName.given ~= nil then
+          name[kGivenName] = {pandoc.Str(parsedName.given)}
+        end
+        if parsedName.family ~= nil then
+          name[kFamilyName] = {pandoc.Str(parsedName.family)}
+        end
+        if name[kDroppingParticle] ~= nil then
+          name[kDroppingParticle] = parsedName[kDroppingParticle]
+        end
+        if name[kNonDroppingParticle] ~= nil then
+          name[kNonDroppingParticle] = parsedName[kNonDroppingParticle]
+        end
       else
         if #name[kLiteralName] > 1 then
           -- bibtex parsing failed, just split on space

@@ -162,18 +162,17 @@ export function partitionCellOptionsText(
   for (const line of rangedLines(source.value, true)) {
     const optionMatch = line.substring.match(optionPattern);
     if (optionMatch) {
-      if (!optionSuffix || line.substring.trimRight().endsWith(optionSuffix)) {
+      if (!optionSuffix || line.substring.trimEnd().endsWith(optionSuffix)) {
         let yamlOption = line.substring.substring(optionMatch[0].length);
         if (optionSuffix) {
-          yamlOption = yamlOption.trimRight();
+          yamlOption = yamlOption.trimEnd();
           yamlOption = yamlOption.substring(
             0,
             yamlOption.length - optionSuffix.length,
-          );
+          ).trimEnd();
         }
         endOfYaml = line.range.start + optionMatch[0].length +
-          yamlOption.length -
-          optionSuffix.length;
+          yamlOption.length;
         const rangedYamlOption = {
           substring: yamlOption,
           range: {
@@ -256,7 +255,7 @@ export function langCommentChars(lang: string): string[] {
   }
 }
 export function optionCommentPattern(comment: string) {
-  return new RegExp("^" + comment + "\\s*\\| ?");
+  return new RegExp("^" + escapeRegExp(comment) + "\\s*\\| ?");
 }
 
 // FIXME this is an awkward spot for this particular entry point
@@ -314,3 +313,7 @@ export const kLangCommentChars: Record<string, string | [string, string]> = {
   dot: "//",
   ojs: "//",
 };
+
+function escapeRegExp(str: string) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); // $& means the whole matched string
+}

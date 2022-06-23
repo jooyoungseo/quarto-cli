@@ -24435,6 +24435,8 @@ function prefixesFromParse(parse) {
     }
   } else if (parse.type === "CharacterSet") {
     return `${parse.raw}?`;
+  } else if (parse.type === "CharacterClass") {
+    return `${parse.raw}?`;
   }
   throw new Error(`Internal Error, don't know how to handle ${parse.type}`);
 }
@@ -27453,7 +27455,7 @@ function langCommentChars(lang) {
   }
 }
 function optionCommentPattern(comment) {
-  return new RegExp("^" + comment + "\\s*\\| ?");
+  return new RegExp("^" + escapeRegExp(comment) + "\\s*\\| ?");
 }
 var kLangCommentChars = {
   r: "#",
@@ -27498,6 +27500,9 @@ var kLangCommentChars = {
   dot: "//",
   ojs: "//"
 };
+function escapeRegExp(str2) {
+  return str2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // ../parse-shortcode.ts
 function isBlockShortcode(content) {

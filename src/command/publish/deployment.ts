@@ -6,33 +6,40 @@
 */
 
 import { warning } from "log/mod.ts";
+import { dirname } from "path/mod.ts";
 
 import { Select } from "cliffy/prompt/select.ts";
 import { Confirm } from "cliffy/prompt/confirm.ts";
 
 import {
+  AccountToken,
   findProvider,
-  PublishDeployment,
+  PublishDeploymentWithAccount,
+  PublishProvider,
   publishProviders,
 } from "../../publish/provider.ts";
 
-import { resolveAccount } from "./account.ts";
-import { PublishOptions } from "../../publish/types.ts";
+import { PublishOptions, PublishRecord } from "../../publish/types.ts";
 import {
   readProjectPublishDeployments,
   readPublishDeployments,
 } from "../../publish/config.ts";
 import { ProjectContext } from "../../project/types.ts";
+import {
+  publishRecordIdentifier,
+  readAccountsPublishedTo,
+} from "../../publish/common/data.ts";
 
 export async function resolveDeployment(
   options: PublishOptions,
   providerFilter?: string,
-): Promise<PublishDeployment | undefined> {
+): Promise<PublishDeploymentWithAccount | undefined> {
   // enumerate any existing deployments
   const deployments = await publishDeployments(
     options,
     providerFilter,
   );
+
   if (deployments && deployments.length > 0) {
     // if a site-id was passed then try to match it
     const siteId = options.id;
@@ -79,7 +86,7 @@ export async function resolveDeployment(
       return deployments[0];
     } else {
       throw new Error(
-        `Multiple previous site publishes exists (specify one with --site-id when using --no-prompt)`,
+        `Multiple previous site publishes exists (specify one with --id when using --no-prompt)`,
       );
     }
   } else if (!options.prompt) {
@@ -96,26 +103,24 @@ export async function resolveDeployment(
 export async function publishDeployments(
   options: PublishOptions,
   providerFilter?: string,
-): Promise<PublishDeployment[]> {
-  const deployments: PublishDeployment[] = [];
+): Promise<PublishDeploymentWithAccount[]> {
+  const deployments: PublishDeploymentWithAccount[] = [];
 
-  // see if provider has a static PublishRecord
-  const isProject = typeof (options.input) !== "string";
-  if (isProject) {
-    for (const provider of await publishProviders()) {
-      if (
-        (!providerFilter || providerFilter === provider.name) &&
-        provider.publishRecord
-      ) {
-        const record = await (provider.publishRecord(
-          (options.input as ProjectContext).dir,
-        ));
-        if (record) {
-          deployments.push({
-            provider,
-            target: record,
-          });
-        }
+  // see if there are any static publish records for this directory
+  const publishDir = typeof (options.input) === "string"
+    ? dirname(options.input)
+    : (options.input as ProjectContext).dir;
+  for (const provider of await publishProviders()) {
+    if (
+      (!providerFilter || providerFilter === provider.name) &&
+      provider.publishRecord
+    ) {
+      const record = await (provider.publishRecord(publishDir));
+      if (record) {
+        deployments.push({
+          provider,
+          target: record,
+        });
       }
     }
   }
@@ -124,19 +129,38 @@ export async function publishDeployments(
   const config = typeof (options.input) === "string"
     ? readPublishDeployments(options.input)
     : readProjectPublishDeployments(options.input);
-  for (const providerName of Object.keys(config)) {
+  for (const providerName of Object.keys(config.records)) {
     if (providerFilter && (providerName !== providerFilter)) {
       continue;
     }
+
     const provider = findProvider(providerName);
     if (provider) {
       // try to update urls if we have an account to bind to
-      const account = await resolveAccount(provider, "never", options);
-      for (const record of config[providerName]) {
+      for (const record of config.records[providerName]) {
+        let account: AccountToken | undefined;
+        const publishedToAccounts = await readAccountsPublishedTo(
+          options.input,
+          provider,
+          record,
+        );
+
+        if (publishedToAccounts.length === 1) {
+          account = publishedToAccounts[0];
+        }
+
         if (account) {
-          const target = await provider.resolveTarget(account, record);
+          const target = await resolveDeploymentTarget(
+            provider,
+            account,
+            record,
+          );
           if (target) {
-            deployments.push({ provider, target });
+            deployments.push({
+              provider,
+              target,
+              account,
+            });
           }
         } else {
           deployments.push({ provider, target: record });
@@ -151,30 +175,43 @@ export async function publishDeployments(
 }
 
 export async function chooseDeployment(
-  depoyments: PublishDeployment[],
-): Promise<PublishDeployment | undefined> {
+  depoyments: PublishDeploymentWithAccount[],
+): Promise<PublishDeploymentWithAccount | undefined> {
   // filter out deployments w/o target url (provided from cli)
   depoyments = depoyments.filter((deployment) => !!deployment.target.url);
 
   // collect unique origins
   const originCounts = depoyments.reduce((origins, deployment) => {
-    const originUrl = new URL(deployment.target.url!).origin;
-    const count = origins.get(originUrl) || 0;
-    origins.set(originUrl, count + 1);
+    try {
+      const originUrl = new URL(deployment.target.url!).origin;
+      const count = origins.get(originUrl) || 0;
+      origins.set(originUrl, count + 1);
+    } catch {
+      // url may not be valid and that shouldn't cause an error
+    }
     return origins;
   }, new Map<string, number>());
 
   const options = depoyments
     .map((deployment) => {
-      const targetOrigin = new URL(deployment.target.url!).origin;
-      const url = (originCounts.get(targetOrigin) === 1 &&
-          deployment.provider.listOriginOnly)
-        ? targetOrigin
-        : deployment.target.url;
+      let url = deployment.target.url;
+      try {
+        const targetOrigin = new URL(deployment.target.url!).origin;
+        if (
+          originCounts.get(targetOrigin) === 1 &&
+          deployment.provider.listOriginOnly
+        ) {
+          url = targetOrigin;
+        }
+      } catch {
+        // url may not be valid and that shouldn't cause an error
+      }
 
       return {
-        name: `${url} (${deployment.provider.description})`,
-        value: deployment.target.url!,
+        name: `${url} (${deployment.provider.description}${
+          deployment.account ? (" - " + deployment.account.name) : ""
+        })`,
+        value: publishRecordIdentifier(deployment.target, deployment.account),
       };
     });
   options.push({
@@ -189,8 +226,31 @@ export async function chooseDeployment(
   });
 
   if (confirm !== "other") {
-    return depoyments.find((deployment) => deployment.target.url === confirm);
+    return depoyments.find((deployment) =>
+      publishRecordIdentifier(deployment.target, deployment.account) === confirm
+    );
   } else {
     return undefined;
   }
+}
+
+async function resolveDeploymentTarget(
+  provider: PublishProvider,
+  account: AccountToken,
+  record: PublishRecord,
+) {
+  try {
+    return await provider.resolveTarget(account, record);
+  } catch (err) {
+    if (provider.isNotFound(err)) {
+      warning(
+        `${record.url} not found (you may need to remove it from the publish configuration)`,
+      );
+      return undefined;
+    } else if (!provider.isUnauthorized(err)) {
+      throw err;
+    }
+  }
+
+  return record;
 }

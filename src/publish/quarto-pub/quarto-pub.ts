@@ -32,7 +32,6 @@ export const quartoPubProvider: PublishProvider = {
   name: kQuartoPub,
   description: "Quarto Pub",
   requiresServer: false,
-  canPublishDocuments: true,
   listOriginOnly: false,
   accountTokens,
   authorizeToken,
@@ -40,6 +39,7 @@ export const quartoPubProvider: PublishProvider = {
   resolveTarget,
   publish,
   isUnauthorized,
+  isNotFound,
 };
 
 function accountTokens() {
@@ -62,7 +62,7 @@ function accountTokens() {
         type: AccountTokenType.Authorized,
         name: accessTk.email!,
         server: null,
-        token: accessTk.applicationToken,
+        token: accessTk.application_token,
       });
     }
   }
@@ -78,7 +78,7 @@ async function authorizeToken(_options: PublishOptions) {
         type: AccountTokenType.Authorized,
         name: token.email!,
         server: null,
-        token: token.applicationToken,
+        token: token.application_token,
       };
     } else {
       return undefined;
@@ -117,13 +117,16 @@ function authorizeQuartoPubAccessToken(): Promise<
     createTicket: (): Promise<Ticket> =>
       client.createTicket(dotenvConfig["QUARTO_PUB_APP_CLIENT_ID"]),
 
-    authorizationUrl: (ticket: Ticket): string => ticket.authorizationURL,
+    authorizationUrl: (ticket: Ticket): string => ticket.authorization_url,
 
     checkTicket: (ticket: Ticket): Promise<Ticket> =>
       client.showTicket(ticket.id),
 
     exchangeTicket: (ticket: Ticket): Promise<AccessToken> =>
       client.exchangeTicket(ticket.id),
+
+    compareTokens: (a: AccessToken, b: AccessToken) =>
+      a.account_identifier === b.account_identifier,
   };
 
   return authorizeAccessToken(provider);
@@ -132,7 +135,7 @@ function authorizeQuartoPubAccessToken(): Promise<
 export function resolveTarget(
   _account: AccountToken,
   target: PublishRecord,
-): Promise<PublishRecord> {
+): Promise<PublishRecord | undefined> {
   return Promise.resolve(target);
 }
 
@@ -165,12 +168,16 @@ function publish(
     uploadDeployFile: (deployId: string, path: string, fileBody: Blob) =>
       client.uploadDeployFile(deployId, path, fileBody),
 
-    updateUserSite: () => client.updateUserSite(),
+    updateAccountSite: () => client.updateAccountSite(),
   };
 
   return handlePublish(handler, type, title, slug, render, target);
 }
 
 function isUnauthorized(_err: Error) {
+  return false;
+}
+
+function isNotFound(_err: Error) {
   return false;
 }

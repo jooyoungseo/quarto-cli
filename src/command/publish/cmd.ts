@@ -165,22 +165,20 @@ async function publishAction(
     publishProvider: PublishProvider,
     accountPrompt: AccountPrompt,
     publishTarget?: PublishRecord,
+    account?: AccountToken,
   ) => {
     // resolve account
-    const account = await resolveAccount(
-      publishProvider,
-      publishOptions.prompt ? accountPrompt : "never",
-      publishOptions,
-      publishTarget,
-    );
+    account = (account && !publishOptions.prompt)
+      ? account
+      : await resolveAccount(
+        publishProvider,
+        publishOptions.prompt ? accountPrompt : "never",
+        publishOptions,
+        account,
+        publishTarget,
+      );
+
     if (account) {
-      // validate that we can publish this
-      const isDocument = typeof (publishOptions.input) === "string";
-      if (isDocument && !publishProvider.canPublishDocuments) {
-        throw new Error(
-          `Publishing single documents is not supported for ${publishProvider.description}`,
-        );
-      }
       // do the publish
       await publish(
         publishProvider,
@@ -203,9 +201,16 @@ async function publishAction(
       publishOptions,
       provider?.name,
     );
+  // update provider
+  provider = deployment?.provider || provider;
   if (deployment) {
     // existing deployment
-    await doPublish(deployment.provider, "multiple", deployment.target);
+    await doPublish(
+      deployment.provider,
+      deployment.account ? "multiple" : "always",
+      deployment.target,
+      deployment.account,
+    );
   } else if (publishOptions.prompt) {
     // new deployment, determine provider if needed
     if (!provider) {

@@ -6,7 +6,7 @@
 */
 
 import { info } from "log/mod.ts";
-import { join, relative } from "path/mod.ts";
+import { dirname, join, relative } from "path/mod.ts";
 import { copy, existsSync } from "fs/mod.ts";
 import * as colors from "fmt/colors.ts";
 
@@ -14,8 +14,8 @@ import { Confirm } from "cliffy/prompt/confirm.ts";
 
 import { removeIfExists, which } from "../../core/path.ts";
 import { execProcess } from "../../core/process.ts";
-import { projectContext } from "../../project/project-context.ts";
-import { kProjectOutputDir, ProjectContext } from "../../project/types.ts";
+
+import { ProjectContext } from "../../project/types.ts";
 import {
   AccountToken,
   anonymousAccount,
@@ -27,6 +27,7 @@ import { shortUuid } from "../../core/uuid.ts";
 import { sleep } from "../../core/wait.ts";
 import { joinUrl } from "../../core/url.ts";
 import { completeMessage, withSpinner } from "../../core/console.ts";
+import { renderForPublish } from "../common/publish.ts";
 
 export const kGhpages = "gh-pages";
 const kGhpagesDescription = "GitHub Pages";
@@ -35,7 +36,6 @@ export const ghpagesProvider: PublishProvider = {
   name: kGhpages,
   description: kGhpagesDescription,
   requiresServer: false,
-  canPublishDocuments: false,
   listOriginOnly: false,
   accountTokens,
   authorizeToken,
@@ -44,10 +44,11 @@ export const ghpagesProvider: PublishProvider = {
   resolveTarget,
   publish,
   isUnauthorized,
+  isNotFound,
 };
 
 function accountTokens() {
-  return Promise.resolve([]);
+  return Promise.resolve([anonymousAccount()]);
 }
 
 async function authorizeToken(options: PublishOptions) {
@@ -77,10 +78,10 @@ function removeToken(_token: AccountToken) {
 
 async function publishRecord(dir: string): Promise<PublishRecord | undefined> {
   const ghContext = await gitHubContext(dir);
-  if (ghContext.ghPages && ghContext.siteUrl) {
+  if (ghContext.ghPages) {
     return {
       id: "gh-pages",
-      url: ghContext.siteUrl,
+      url: ghContext.siteUrl || ghContext.originUrl,
     };
   }
 }
@@ -88,20 +89,23 @@ async function publishRecord(dir: string): Promise<PublishRecord | undefined> {
 function resolveTarget(
   _account: AccountToken,
   target: PublishRecord,
-) {
+): Promise<PublishRecord | undefined> {
   return Promise.resolve(target);
 }
 
 async function publish(
   _account: AccountToken,
-  _type: "document" | "site",
+  type: "document" | "site",
   input: string,
-  _title: string,
+  title: string,
   _slug: string,
   render: (siteUrl?: string) => Promise<PublishFiles>,
   options: PublishOptions,
-  _target?: PublishRecord,
+  target?: PublishRecord,
 ): Promise<[PublishRecord | undefined, URL | undefined]> {
+  // convert input to dir if necessary
+  input = Deno.statSync(input).isDirectory ? input : dirname(input);
+
   // get context
   const ghContext = await gitHubContext(input);
 
@@ -110,7 +114,9 @@ async function publish(
     // confirm
     const confirmed = await Confirm.prompt({
       indent: "",
-      message: `Publish site to ${ghContext.siteUrl} using gh-pages?`,
+      message: `Publish site to ${
+        ghContext.siteUrl || ghContext.originUrl
+      } using gh-pages?`,
       default: true,
     });
     if (!confirmed) {
@@ -139,12 +145,13 @@ async function publish(
   ]);
 
   // render
-  const project = (await projectContext(input))!;
-  const outputDir = project.config?.project[kProjectOutputDir];
-  if (outputDir === undefined) {
-    throwUnableToPublish("no output-dir defined for project");
-  }
-  const renderResult = await render(ghContext.siteUrl);
+  const renderResult = await renderForPublish(
+    render,
+    "gh-pages",
+    type,
+    title,
+    target?.url,
+  );
 
   // allocate worktree dir
   const tempDir = Deno.makeTempDirSync({ dir: input });
@@ -200,14 +207,14 @@ async function publish(
     });
   }
 
-  completeMessage(`Published: ${ghContext.siteUrl}`);
+  completeMessage(`Published to ${ghContext.siteUrl || ghContext.originUrl}`);
   info("");
 
   if (!verified) {
-    info(
-      "NOTE: GitHub Pages deployments normally take a few minutes\n" +
-        "(your site updates will visible once the deploy completes)\n",
-    );
+    info(colors.yellow(
+      "NOTE: GitHub Pages deployments normally take a few minutes (your site updates\n" +
+        "will be visible once the deploy completes)\n",
+    ));
   }
 
   return Promise.resolve([
@@ -217,6 +224,10 @@ async function publish(
 }
 
 function isUnauthorized(_err: Error) {
+  return false;
+}
+
+function isNotFound(_err: Error) {
   return false;
 }
 
@@ -330,6 +341,7 @@ type GitHubContext = {
   originUrl?: string;
   ghPages?: boolean;
   siteUrl?: string;
+  browse?: boolean;
 };
 
 async function gitHubContext(dir: string) {
@@ -389,15 +401,17 @@ function siteUrl(dir: string, originUrl: string) {
   if (existsSync(cname)) {
     return Deno.readTextFileSync(cname).trim();
   } else {
-    // git and ssh protccols
+    // pick apart origin url for github.com
     const match = originUrl?.match(
       /git@([^:]+):([^\/]+)\/([^.]+)\.git/,
     ) || originUrl?.match(
       /https:\/\/([^\/]+)\/([^\/]+)\/([^.]+)\.git/,
     );
 
-    if (match) {
-      const server = match[1].replace("github.com", "github.io");
+    const kGithubCom = "github.com";
+    const kGithubIo = "github.io";
+    if (match && match.includes(kGithubCom)) {
+      const server = match[1].replace(kGithubCom, kGithubIo);
       return `https://${match[2]}.${server}/${match[3]}/`;
     }
   }
